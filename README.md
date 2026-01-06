@@ -47,7 +47,7 @@ A modern, biometric-based attendance management system built with Flutter and Fi
 ### Installation
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-username/attendance_app.git
+   git clone https://github.com/BilalWattu521/smart-attendance-system.git
    ```
 2. **Setup Firebase**
    - Add your `google-services.json` to `android/app/`.
