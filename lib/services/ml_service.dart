@@ -56,10 +56,8 @@ class MLService {
         options: options,
       );
       _isModelLoaded = true;
-      _isModelLoaded = true;
-      debugPrint('FaceNet model loaded successfully');
     } catch (e) {
-      debugPrint('Failed to load model: $e');
+      // Failed to load model
     }
   }
 
@@ -74,7 +72,7 @@ class MLService {
     int rotation,
   ) async {
     if (!_isModelLoaded || _interpreter == null) {
-      debugPrint('[MLService] Model not loaded');
+      // Model not loaded
       return null;
     }
 
@@ -115,11 +113,8 @@ class MLService {
 
       // Minimum size check
       if (w <= 0 || h <= 0) {
-        debugPrint('Invalid face dimensions: $w x $h');
         return null;
       }
-
-      debugPrint('[MLService] Cropping face at ($x, $y) size $w x $h');
 
       // 3. Crop and resize to 112x112
       img.Image croppedImage = img.copyCrop(
@@ -140,11 +135,9 @@ class MLService {
       Float32List input = _imageToByteListFloat32(resizedImage);
 
       // 5. Run Inference
-      debugPrint('[MLService] Running inference...');
       var outputBuffer = List.generate(1, (_) => List.filled(192, 0.0));
       _interpreter!.run(input.reshape([1, 112, 112, 3]), outputBuffer);
 
-      debugPrint('[MLService] Embedding generated successfully!');
       List<double> embedding = outputBuffer[0];
 
       // L2 Normalization
@@ -160,9 +153,7 @@ class MLService {
       }
 
       return embedding;
-    } catch (e, stackTrace) {
-      debugPrint('[MLService] Error in predict: $e');
-      debugPrint('[MLService] Stack: $stackTrace');
+    } catch (e) {
       return null;
     }
   }
@@ -175,7 +166,7 @@ class MLService {
     int rotation,
   ) async {
     if (!_isModelLoaded || _interpreter == null) {
-      debugPrint('[MLService] Model not loaded');
+      // Model not loaded
       return null;
     }
 
@@ -214,7 +205,6 @@ class MLService {
       if (y + h > convertedImage.height) h = convertedImage.height - y;
 
       if (w <= 0 || h <= 0) {
-        debugPrint('[MLService] Invalid face dimensions: $w x $h');
         return null;
       }
 
@@ -254,9 +244,7 @@ class MLService {
       }
 
       return embedding;
-    } catch (e, stackTrace) {
-      debugPrint('[MLService] Error in predictFromData: $e');
-      debugPrint('[MLService] Stack: $stackTrace');
+    } catch (e) {
       return null;
     }
   }
@@ -291,10 +279,8 @@ class MLService {
         return _convertYUV420FromData(imageData);
       }
 
-      debugPrint('[MLService] Unknown format: ${imageData.format}');
       return null;
     } catch (e) {
-      debugPrint('[MLService] Data conversion error: $e');
       return null;
     }
   }
@@ -334,10 +320,8 @@ class MLService {
         }
       }
 
-      debugPrint('[MLService] NV21 from data conversion successful');
       return image;
     } catch (e) {
-      debugPrint('[MLService] NV21 from data error: $e');
       return null;
     }
   }
@@ -390,10 +374,8 @@ class MLService {
         }
       }
 
-      debugPrint('[MLService] NV21 single-plane conversion successful');
       return image;
     } catch (e) {
-      debugPrint('[MLService] NV21 single-plane error: $e');
       return null;
     }
   }
@@ -435,7 +417,6 @@ class MLService {
       }
       return image;
     } catch (e) {
-      debugPrint('[MLService] YUV420 from data error: $e');
       return null;
     }
   }
@@ -461,7 +442,6 @@ class MLService {
   img.Image? _convertCameraImage(CameraImage image) {
     try {
       final numPlanes = image.planes.length;
-      debugPrint('[MLService] Image has $numPlanes planes');
 
       if (image.format.group == ImageFormatGroup.nv21) {
         // NV21 has 2 planes: Y + interleaved VU
@@ -480,10 +460,8 @@ class MLService {
         return _convertYUV420ToImage(image);
       }
 
-      debugPrint('[MLService] Unknown format: ${image.format.group}');
       return null;
     } catch (e) {
-      debugPrint('[MLService] Image conversion error: $e');
       return null;
     }
   }
@@ -496,14 +474,6 @@ class MLService {
 
       final yPlane = cameraImage.planes[0];
       final vuPlane = cameraImage.planes[1]; // NV21: VU interleaved
-
-      debugPrint('[MLService] NV21 conversion: $width x $height');
-      debugPrint(
-        '[MLService] Y plane: ${yPlane.bytes.length} bytes, bytesPerRow: ${yPlane.bytesPerRow}',
-      );
-      debugPrint(
-        '[MLService] VU plane: ${vuPlane.bytes.length} bytes, bytesPerRow: ${vuPlane.bytesPerRow}',
-      );
 
       final img.Image image = img.Image(width: width, height: height);
 
@@ -538,10 +508,8 @@ class MLService {
         }
       }
 
-      debugPrint('[MLService] NV21 conversion successful');
       return image;
     } catch (e) {
-      debugPrint('[MLService] NV21 conversion error: $e');
       return null;
     }
   }

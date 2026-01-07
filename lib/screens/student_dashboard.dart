@@ -208,7 +208,7 @@ class _StudentDashboardState extends State<StudentDashboard>
       }
 
       if (!_configLoaded) {
-        debugPrint('Failed to load campus configuration.');
+        // Failed to load campus configuration
         return;
       }
 
@@ -242,15 +242,13 @@ class _StudentDashboardState extends State<StudentDashboard>
 
         if (_campusLat != null && _campusLng != null && _campusRadius != null) {
           _configLoaded = true;
-          debugPrint(
-            'Campus Config: $_campusLat, $_campusLng, $_campusRadius m',
-          );
+          // Config loaded
         }
       } else {
-        debugPrint('Campus config missing in Firestore.');
+        // Campus config missing
       }
     } catch (e) {
-      debugPrint('Error fetching config: $e');
+      // Error fetching config
     }
   }
 
@@ -323,7 +321,7 @@ class _StudentDashboardState extends State<StudentDashboard>
       );
       _checkGeofence(position);
     } catch (e) {
-      debugPrint('Error getting initial position: $e');
+      // Error getting initial position
     }
 
     // 3. Start geofencing stream
@@ -338,7 +336,7 @@ class _StudentDashboardState extends State<StudentDashboard>
             _checkGeofence(position);
           },
           onError: (e) {
-            debugPrint('Location Stream Error: $e');
+            // Location Stream Error
           },
         );
   }
@@ -391,9 +389,9 @@ class _StudentDashboardState extends State<StudentDashboard>
     try {
       await logRef.set(data, SetOptions(merge: true));
       _lastWrittenStatus = isInside;
-      debugPrint('Geofence Log Updated: Inside=$isInside');
+      // Geofence Log Updated
     } catch (e) {
-      debugPrint('Error writing geofence log: $e');
+      // Error writing geofence log
     }
   }
 

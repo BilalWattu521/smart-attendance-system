@@ -221,7 +221,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
         currentEmbedding,
         _storedEmbedding!,
       );
-      debugPrint('[Verification] Distance: $distance');
+      // Check distance against threshold
 
       // Check if embedding is valid (not just zeros)
       bool isValidEmbedding = currentEmbedding.any((v) => v != 0.0);
@@ -252,7 +252,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
             Navigator.pop(context, true);
           }
         } catch (e) {
-          debugPrint('[Verification] Error updating attendance: $e');
+          // Log error internally if needed
           if (mounted) {
             setState(() {
               _statusMessage = "Error updating database:\n$e";

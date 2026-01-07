@@ -228,7 +228,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen> {
         Navigator.pop(context, true);
       }
     } catch (e) {
-      debugPrint('[Enrollment] Error: $e');
+      // Log error internally if needed
 
       if (mounted) {
         setState(() {

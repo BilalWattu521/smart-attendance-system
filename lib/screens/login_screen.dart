@@ -47,18 +47,27 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       // Any further checks (profile/role) are handled in AuthGate.
     } on FirebaseAuthException catch (e) {
-      String msg = 'Login failed. Please check your credentials.';
-      if (e.code == 'user-not-found' || e.code == 'wrong-password') {
+      String msg = 'Login failed. Please try again.';
+      if (e.code == 'user-not-found' ||
+          e.code == 'wrong-password' ||
+          e.code == 'invalid-credential') {
         msg = 'Invalid email or password.';
       } else if (e.code == 'invalid-email') {
-        msg = 'Invalid email format.';
+        msg = 'Invalid email address.';
+      } else if (e.code == 'user-disabled') {
+        msg = 'This account has been disabled.';
+      } else if (e.code == 'too-many-requests') {
+        msg = 'Too many attempts. Please try again later.';
+      } else if (e.code == 'network-request-failed') {
+        msg = 'Network error. Please check your connection.';
       }
+
       setState(() {
         _errorMessage = msg;
       });
     } catch (_) {
       setState(() {
-        _errorMessage = 'Unexpected error. Please try again.';
+        _errorMessage = 'An unexpected error occurred. Please try again.';
       });
     } finally {
       if (mounted) {

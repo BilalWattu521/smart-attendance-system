@@ -144,6 +144,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
               leading: const Icon(Icons.logout_rounded),
               title: const Text('Logout'),
               onTap: () => FirebaseAuth.instance.signOut(),
+              iconColor: theme.colorScheme.error,
+              textColor: theme.colorScheme.error,
             ),
             const SizedBox(height: 16),
           ],
@@ -412,6 +414,7 @@ class _CreateUserTabState extends State<CreateUserTab> {
 
       final tempApp = await Firebase.initializeApp(
         name: 'userCreation_${DateTime.now().millisecondsSinceEpoch}',
+        options: Firebase.app().options,
       );
 
       final tempAuth = FirebaseAuth.instanceFor(app: tempApp);
@@ -421,7 +424,9 @@ class _CreateUserTabState extends State<CreateUserTab> {
       );
 
       final uid = credential.user?.uid;
-      if (uid == null) throw Exception('Failed to retrieve new user UID');
+      if (uid == null) {
+        throw Exception('Failed to retrieve new user UID');
+      }
 
       await FirebaseFirestore.instance.collection('users').doc(uid).set({
         'name': _nameController.text.trim(),
@@ -446,8 +451,24 @@ class _CreateUserTabState extends State<CreateUserTab> {
       }
     } catch (e) {
       if (mounted) {
+        String msg = 'Failed to create user. Please try again.';
+        if (e is FirebaseAuthException) {
+          if (e.code == 'email-already-in-use') {
+            msg = 'This email is already registered.';
+          } else if (e.code == 'weak-password') {
+            msg = 'Password must be at least 6 characters.';
+          } else if (e.code == 'invalid-email') {
+            msg = 'Please enter a valid email address.';
+          } else if (e.code == 'network-request-failed') {
+            msg = 'Network error. check your connection.';
+          } else {
+            msg = e.message ?? msg;
+          }
+        } else {
+          msg = 'Error: $e';
+        }
         setState(() {
-          _message = 'Error: $e';
+          _message = msg;
         });
       }
     } finally {

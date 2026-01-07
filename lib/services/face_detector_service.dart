@@ -27,19 +27,16 @@ class FaceDetectorService {
     try {
       final inputImage = _buildInputImage(image, rotation);
       if (inputImage == null) {
-        debugPrint('[FaceDetector] Failed to build InputImage');
+        // Failed to build InputImage
         _isBusy = false;
         return [];
       }
 
       final faces = await _faceDetector.processImage(inputImage);
-      debugPrint(
-        '[FaceDetector] Found ${faces.length} faces | Format: ${image.format.group} | Size: ${image.width}x${image.height}',
-      );
       _isBusy = false;
       return faces;
     } catch (e) {
-      debugPrint('[FaceDetector] ERROR: $e');
+      // Error: $e
       _isBusy = false;
       return [];
     }

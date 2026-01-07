@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
 import 'screens/admin_dashboard.dart';
 import 'screens/student_dashboard.dart';
-import 'screens/blocked_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,19 +15,17 @@ Future<void> main() async {
   // Handle Flutter framework errors
   FlutterError.onError = (FlutterErrorDetails details) {
     FlutterError.presentError(details);
-    debugPrint('Flutter Error: ${details.exception}');
   };
 
   // Handle async errors
   PlatformDispatcher.instance.onError = (error, stack) {
-    debugPrint('Platform Error: $error');
     return true;
   };
 
   try {
     await Firebase.initializeApp();
-  } catch (e) {
-    debugPrint('Firebase initialization error: $e');
+  } catch (_) {
+    // Silently handle initialization error
   }
 
   runApp(const MyApp());
@@ -117,20 +114,6 @@ class MyApp extends StatelessWidget {
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});
 
-  Future<DocumentSnapshot<Map<String, dynamic>>?> _getUserProfile(
-    String uid,
-  ) async {
-    try {
-      return await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .get();
-    } catch (e) {
-      debugPrint('Error fetching user profile: $e');
-      return null;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
@@ -143,7 +126,7 @@ class AuthGate extends StatelessWidget {
         }
 
         if (snapshot.hasError) {
-          debugPrint('Auth stream error: ${snapshot.error}');
+          // Check for network errors, etc. if needed
           return const LoginScreen();
         }
 
@@ -152,8 +135,12 @@ class AuthGate extends StatelessWidget {
           return const LoginScreen();
         }
 
-        return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>?>(
-          future: _getUserProfile(user.uid),
+        // Use StreamBuilder instead of FutureBuilder for real-time updates
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.uid)
+              .snapshots(),
           builder: (context, userSnap) {
             if (userSnap.connectionState == ConnectionState.waiting) {
               return const Scaffold(
@@ -161,11 +148,7 @@ class AuthGate extends StatelessWidget {
               );
             }
 
-            // Handle errors
             if (userSnap.hasError) {
-              debugPrint('Error fetching user profile: ${userSnap.error}');
-              // On error, show connection error
-
               return Scaffold(
                 body: Center(
                   child: Column(
@@ -177,15 +160,7 @@ class AuthGate extends StatelessWidget {
                         color: Colors.red,
                       ),
                       const SizedBox(height: 16),
-                      const Text(
-                        'Connection Error',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text('Please check your internet connection.'),
+                      Text('Error: ${userSnap.error}'),
                       const SizedBox(height: 16),
                       ElevatedButton(
                         onPressed: () => FirebaseAuth.instance.signOut(),
@@ -199,51 +174,12 @@ class AuthGate extends StatelessWidget {
 
             final data = userSnap.data;
 
-            // If profile is missing or error occurred, strict block.
+            // If profile is missing, treat as invalid login (sign out and show login)
             if (data == null || !data.exists) {
-              debugPrint('❌ Profile missing - blocking access');
-              return Scaffold(
-                body: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.block, size: 72, color: Colors.red),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Access Blocked',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Account is not provisioned. Please contact an administrator.',
-                          textAlign: TextAlign.center,
-                        ),
-                        ...[
-                          const SizedBox(height: 8),
-                          SelectableText(
-                            'UID: ${user.uid}',
-                            style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                              color: Colors.grey,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 16),
-                        ElevatedButton(
-                          onPressed: () => FirebaseAuth.instance.signOut(),
-                          child: const Text('Back to Login'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                FirebaseAuth.instance.signOut();
+              });
+              return const LoginScreen();
             }
 
             final role = data.data()?['role'] as String?;
@@ -258,12 +194,11 @@ class AuthGate extends StatelessWidget {
             } else if (role == 'student') {
               return StudentDashboard(currentUser: user);
             } else {
-              // Unauthorized / unknown role.
-              // Do NOT sign out automatically to avoid loops.
-              return BlockedScreen(
-                message: 'Unauthorized role. Please contact an administrator.',
-                currentUser: user,
-              );
+              // Unauthorized role: Sign out and show login
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                FirebaseAuth.instance.signOut();
+              });
+              return const LoginScreen();
             }
           },
         );
