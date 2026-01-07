@@ -67,7 +67,12 @@ class MLService {
 
   /// Pre-process the CameraImage/Face to fit the model input (112x112)
   /// Returns the standard Float32List embedding
-  Future<List<double>?> predict(CameraImage cameraImage, Face face) async {
+  Future<List<double>?> predict(
+    CameraImage cameraImage,
+    Face face,
+    bool isFrontCamera,
+    int rotation,
+  ) async {
     if (!_isModelLoaded || _interpreter == null) {
       debugPrint('[MLService] Model not loaded');
       return null;
@@ -75,25 +80,36 @@ class MLService {
 
     try {
       // 1. Convert CameraImage to img.Image
-      debugPrint(
-        '[MLService] Converting image... Format: ${cameraImage.format.group}, Size: ${cameraImage.width}x${cameraImage.height}',
-      );
       img.Image? convertedImage = _convertCameraImage(cameraImage);
-      if (convertedImage == null) {
-        debugPrint('[MLService] Image conversion failed');
-        return null;
+      if (convertedImage == null) return null;
+
+      // 2. Rotate image to upright orientation
+      if (rotation == 90) {
+        convertedImage = img.copyRotate(convertedImage, angle: 90);
+      } else if (rotation == 180) {
+        convertedImage = img.copyRotate(convertedImage, angle: 180);
+      } else if (rotation == 270) {
+        convertedImage = img.copyRotate(convertedImage, angle: 270);
       }
-      debugPrint(
-        '[MLService] Image converted: ${convertedImage.width}x${convertedImage.height}',
+
+      // 3. Flip if front camera
+      if (isFrontCamera) {
+        convertedImage = img.flipHorizontal(convertedImage);
+      }
+
+      // 4. Get face bounding box with padding (20%)
+      double padding = face.boundingBox.width * 0.20;
+      int x = (face.boundingBox.left - padding).toInt().clamp(
+        0,
+        convertedImage.width - 1,
       );
+      int y = (face.boundingBox.top - padding).toInt().clamp(
+        0,
+        convertedImage.height - 1,
+      );
+      int w = (face.boundingBox.width + padding * 2).toInt();
+      int h = (face.boundingBox.height + padding * 2).toInt();
 
-      // 2. Get face bounding box with bounds checking
-      int x = face.boundingBox.left.toInt().clamp(0, convertedImage.width - 1);
-      int y = face.boundingBox.top.toInt().clamp(0, convertedImage.height - 1);
-      int w = face.boundingBox.width.toInt();
-      int h = face.boundingBox.height.toInt();
-
-      // Ensure crop doesn't exceed image bounds
       if (x + w > convertedImage.width) w = convertedImage.width - x;
       if (y + h > convertedImage.height) h = convertedImage.height - y;
 
@@ -125,18 +141,25 @@ class MLService {
 
       // 5. Run Inference
       debugPrint('[MLService] Running inference...');
-      final output = Float32List(192);
-      final inputs = [
-        input.reshape([1, 112, 112, 3]),
-      ];
-      final outputs = {
-        0: output.reshape([1, 192]),
-      };
-
-      _interpreter!.runForMultipleInputs(inputs, outputs);
+      var outputBuffer = List.generate(1, (_) => List.filled(192, 0.0));
+      _interpreter!.run(input.reshape([1, 112, 112, 3]), outputBuffer);
 
       debugPrint('[MLService] Embedding generated successfully!');
-      return List<double>.from(output);
+      List<double> embedding = outputBuffer[0];
+
+      // L2 Normalization
+      double sum = 0;
+      for (double v in embedding) {
+        sum += v * v;
+      }
+      double norm = sqrt(sum);
+      if (norm > 0) {
+        for (int i = 0; i < embedding.length; i++) {
+          embedding[i] /= norm;
+        }
+      }
+
+      return embedding;
     } catch (e, stackTrace) {
       debugPrint('[MLService] Error in predict: $e');
       debugPrint('[MLService] Stack: $stackTrace');
@@ -148,6 +171,8 @@ class MLService {
   Future<List<double>?> predictFromData(
     CameraImageData imageData,
     Face face,
+    bool isFrontCamera,
+    int rotation,
   ) async {
     if (!_isModelLoaded || _interpreter == null) {
       debugPrint('[MLService] Model not loaded');
@@ -156,16 +181,34 @@ class MLService {
 
     try {
       img.Image? convertedImage = _convertFromCameraImageData(imageData);
-      if (convertedImage == null) {
-        debugPrint('[MLService] Image conversion from data failed');
-        return null;
+      if (convertedImage == null) return null;
+
+      // Rotate
+      if (rotation == 90) {
+        convertedImage = img.copyRotate(convertedImage, angle: 90);
+      } else if (rotation == 180) {
+        convertedImage = img.copyRotate(convertedImage, angle: 180);
+      } else if (rotation == 270) {
+        convertedImage = img.copyRotate(convertedImage, angle: 270);
       }
 
-      // Get face bounding box with bounds checking
-      int x = face.boundingBox.left.toInt().clamp(0, convertedImage.width - 1);
-      int y = face.boundingBox.top.toInt().clamp(0, convertedImage.height - 1);
-      int w = face.boundingBox.width.toInt();
-      int h = face.boundingBox.height.toInt();
+      // Flip if front camera
+      if (isFrontCamera) {
+        convertedImage = img.flipHorizontal(convertedImage);
+      }
+
+      // Get face bounding box with 20% padding
+      double padding = face.boundingBox.width * 0.20;
+      int x = (face.boundingBox.left - padding).toInt().clamp(
+        0,
+        convertedImage.width - 1,
+      );
+      int y = (face.boundingBox.top - padding).toInt().clamp(
+        0,
+        convertedImage.height - 1,
+      );
+      int w = (face.boundingBox.width + padding * 2).toInt();
+      int h = (face.boundingBox.height + padding * 2).toInt();
 
       if (x + w > convertedImage.width) w = convertedImage.width - x;
       if (y + h > convertedImage.height) h = convertedImage.height - y;
@@ -196,7 +239,21 @@ class MLService {
       _interpreter!.run(input.reshape([1, 112, 112, 3]), outputBuffer);
 
       // Extract the embedding from the 2D array
-      return outputBuffer[0];
+      List<double> embedding = outputBuffer[0];
+
+      // L2 Normalization: Ensure vector length is 1 for robust comparison
+      double sum = 0;
+      for (double v in embedding) {
+        sum += v * v;
+      }
+      double norm = sqrt(sum);
+      if (norm > 0) {
+        for (int i = 0; i < embedding.length; i++) {
+          embedding[i] /= norm;
+        }
+      }
+
+      return embedding;
     } catch (e, stackTrace) {
       debugPrint('[MLService] Error in predictFromData: $e');
       debugPrint('[MLService] Stack: $stackTrace');
@@ -384,17 +441,16 @@ class MLService {
   }
 
   Float32List _imageToByteListFloat32(img.Image image) {
-    var convertedBytes = Float32List(1 * inputSize * inputSize * 3);
-    var buffer = Float32List.view(convertedBytes.buffer);
+    var convertedBytes = Float32List(inputSize * inputSize * 3);
     int pixelIndex = 0;
 
     for (var i = 0; i < inputSize; i++) {
       for (var j = 0; j < inputSize; j++) {
         var pixel = image.getPixel(j, i);
-        // Normalize to [-1, 1]
-        buffer[pixelIndex++] = (pixel.r - 127.5) / 128.0;
-        buffer[pixelIndex++] = (pixel.g - 127.5) / 128.0;
-        buffer[pixelIndex++] = (pixel.b - 127.5) / 128.0;
+        // Normalize to [-1, 1] - crucial for MobileFaceNet
+        convertedBytes[pixelIndex++] = (pixel.r - 127.5) / 128.0;
+        convertedBytes[pixelIndex++] = (pixel.g - 127.5) / 128.0;
+        convertedBytes[pixelIndex++] = (pixel.b - 127.5) / 128.0;
       }
     }
     return convertedBytes;

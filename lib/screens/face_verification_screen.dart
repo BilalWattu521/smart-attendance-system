@@ -4,6 +4,7 @@ import 'package:attendance_app/services/ml_service.dart';
 import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 class FaceVerificationScreen extends StatefulWidget {
@@ -29,6 +30,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
 
   bool _isInitializing = true;
   bool _isVerifying = false;
+  int _cameraIndex = 0;
+  List<CameraDescription> _availableCameras = [];
   String? _statusMessage;
   List<double>? _storedEmbedding;
 
@@ -63,59 +66,87 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
       await _mlService.initialize();
 
       // 3. Init Camera
-      final cameras = await availableCameras();
-      // Use back camera for Admin to verify student, or front if self-verification?
-      // Usually Admin is holding the phone, so back camera is better.
-      final backCamera = cameras.firstWhere(
+      _availableCameras = await availableCameras();
+      if (_availableCameras.isEmpty) throw Exception("No cameras found");
+
+      // Search for back camera initially as default for verification
+      _cameraIndex = _availableCameras.indexWhere(
         (camera) => camera.lensDirection == CameraLensDirection.back,
-        orElse: () => cameras.first,
       );
+      if (_cameraIndex == -1) _cameraIndex = 0;
 
-      _cameraController = CameraController(
-        backCamera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: Platform.isAndroid
-            ? ImageFormatGroup.nv21
-            : ImageFormatGroup.bgra8888,
-      );
-
-      await _cameraController!.initialize();
-      await _cameraController!.startImageStream(_processCameraImage);
-
-      if (mounted) {
-        setState(() {
-          _isInitializing = false;
-        });
-      }
+      await _initCamera(_availableCameras[_cameraIndex]);
     } catch (e) {
       if (mounted) {
         setState(() {
-          _statusMessage = 'Error: $e';
+          if (e is CameraException && e.code == 'CameraAccessDenied') {
+            _statusMessage = 'PERMISSION_DENIED';
+          } else {
+            _statusMessage = 'Error: $e';
+          }
           _isInitializing = false;
         });
       }
     }
   }
 
-  InputImageRotation _getRotation(CameraDescription camera) {
+  Future<void> _initCamera(CameraDescription description) async {
+    _cameraController = CameraController(
+      description,
+      ResolutionPreset.medium,
+      enableAudio: false,
+      imageFormatGroup: Platform.isAndroid
+          ? ImageFormatGroup.nv21
+          : ImageFormatGroup.bgra8888,
+    );
+
+    await _cameraController!.initialize();
+    await _cameraController!.startImageStream(_processCameraImage);
+
+    if (mounted) {
+      setState(() {
+        _isInitializing = false;
+      });
+    }
+  }
+
+  Future<void> _toggleCamera() async {
+    if (_availableCameras.length < 2) return;
+
+    setState(() {
+      _isInitializing = true;
+      _canVerify = false;
+    });
+
+    await _cameraController?.stopImageStream();
+    await _cameraController?.dispose();
+
+    _cameraIndex = (_cameraIndex + 1) % _availableCameras.length;
+    await _initCamera(_availableCameras[_cameraIndex]);
+  }
+
+  int _getRotationDegrees(CameraDescription camera) {
     final sensorOrientation = camera.sensorOrientation;
     if (Platform.isAndroid) {
-      int rotationCompensation = sensorOrientation;
-      switch (rotationCompensation) {
-        case 0:
-          return InputImageRotation.rotation0deg;
-        case 90:
-          return InputImageRotation.rotation90deg;
-        case 180:
-          return InputImageRotation.rotation180deg;
-        case 270:
-          return InputImageRotation.rotation270deg;
-        default:
-          return InputImageRotation.rotation0deg;
-      }
+      return sensorOrientation;
     }
-    return InputImageRotation.rotation0deg;
+    return 0;
+  }
+
+  InputImageRotation _getRotation(CameraDescription camera) {
+    final degrees = _getRotationDegrees(camera);
+    switch (degrees) {
+      case 0:
+        return InputImageRotation.rotation0deg;
+      case 90:
+        return InputImageRotation.rotation90deg;
+      case 180:
+        return InputImageRotation.rotation180deg;
+      case 270:
+        return InputImageRotation.rotation270deg;
+      default:
+        return InputImageRotation.rotation0deg;
+    }
   }
 
   bool _isProcessing = false;
@@ -171,9 +202,15 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
     });
 
     try {
+      final camera = _availableCameras[_cameraIndex];
+      final isFront = camera.lensDirection == CameraLensDirection.front;
+      final rotation = _getRotationDegrees(camera);
+
       final currentEmbedding = await _mlService.predictFromData(
         _lastValidImageData!,
         _lastDetectedFace!,
+        isFront,
+        rotation,
       );
 
       if (currentEmbedding == null) {
@@ -186,8 +223,15 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
       );
       debugPrint('[Verification] Distance: $distance');
 
-      // Threshold: 1.0 is generally good for MobileFaceNet
-      if (distance < 1.0) {
+      // Check if embedding is valid (not just zeros)
+      bool isValidEmbedding = currentEmbedding.any((v) => v != 0.0);
+      if (!isValidEmbedding) {
+        throw Exception("Invalid face capture. Please try again.");
+      }
+
+      // Threshold: 0.75 is standard for a robustly oriented model.
+      // With fixed rotation, self-distance should be 0.2-0.4.
+      if (distance < 0.75) {
         setState(
           () => _statusMessage =
               "Match Found! (Dist: ${distance.toStringAsFixed(2)})\nUpdating attendance...",
@@ -262,7 +306,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
 
   @override
   void dispose() {
-    _cameraController?.stopImageStream();
+    if (_cameraController != null && _cameraController!.value.isInitialized) {
+      _cameraController?.stopImageStream();
+    }
     _cameraController?.dispose();
     _faceDetectorService.dispose();
     super.dispose();
@@ -288,6 +334,73 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
       );
     }
 
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+      final isPermissionError = _statusMessage == 'PERMISSION_DENIED';
+
+      return Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        appBar: AppBar(
+          title: Text(
+            isPermissionError ? "Permission Required" : "Camera Error",
+          ),
+          elevation: 0,
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  isPermissionError
+                      ? Icons.camera_enhance_rounded
+                      : Icons.error_outline_rounded,
+                  size: 80,
+                  color: isPermissionError
+                      ? Colors.orange
+                      : theme.colorScheme.error,
+                ).animate().scale(duration: 400.ms, curve: Curves.easeOutBack),
+                const SizedBox(height: 24),
+                Text(
+                  isPermissionError
+                      ? "Camera Access Needed"
+                      : "Initialization Failed",
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  isPermissionError
+                      ? "To verify student identity, we need access to the camera. Please grant permission in device settings."
+                      : (_statusMessage ??
+                            "Camera failed to start. Please try again."),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 32),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: theme.colorScheme.primary,
+                      foregroundColor: theme.colorScheme.onPrimary,
+                    ),
+                    child: const Text("GO BACK"),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -301,6 +414,17 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
             fontWeight: FontWeight.bold,
           ),
         ),
+        actions: [
+          if (!_isInitializing && _availableCameras.length > 1)
+            IconButton(
+              icon: const Icon(
+                Icons.flip_camera_ios_rounded,
+                color: Colors.white,
+              ),
+              onPressed: _isVerifying ? null : _toggleCamera,
+            ),
+          const SizedBox(width: 8),
+        ],
       ),
       extendBodyBehindAppBar: true,
       body: Stack(
