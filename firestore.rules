@@ -8,7 +8,7 @@ service cloud.firestore {
 
     // Hardcoded Root Admin UID for bootstrap/bypass
     function isRootAdmin() {
-      return isSignedIn() && request.auth.uid == 'PwwEUjosfKdCeOGFSWj1p38RHIp1';
+      return isSignedIn() && request.auth.uid == 'YOUR ROOT ADMIN's UID';
     }
 
     // Helper to get the user's role from their profile document
