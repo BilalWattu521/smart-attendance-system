@@ -38,6 +38,9 @@ class _StudentDashboardState extends State<StudentDashboard>
   // Location & Map
   final MapController _mapController = MapController();
   Position? _currentPosition;
+  bool _isLocationServiceEnabled = true;
+  StreamSubscription<Position>? _locationSubscription;
+  StreamSubscription<ServiceStatus>? _serviceStatusSubscription;
 
   // New Dashboard State
   int _selectedIndex = 0;
@@ -47,6 +50,24 @@ class _StudentDashboardState extends State<StudentDashboard>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    // Listen to location service status (GPS toggle)
+    _serviceStatusSubscription = Geolocator.getServiceStatusStream().listen((
+      status,
+    ) {
+      if (mounted) {
+        final isEnabled = status == ServiceStatus.enabled;
+        setState(() {
+          _isLocationServiceEnabled = isEnabled;
+          if (!isEnabled) {
+            _currentPosition = null;
+            _isInsideCampus = null;
+          }
+        });
+        if (isEnabled) _initGeofencing();
+      }
+    });
+
     _initGeofencing();
     _fetchUserData();
     _startAttendanceListener();
@@ -165,6 +186,8 @@ class _StudentDashboardState extends State<StudentDashboard>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _attendanceSubscription?.cancel();
+    _locationSubscription?.cancel();
+    _serviceStatusSubscription?.cancel();
     _mapController.dispose();
     super.dispose();
   }
@@ -236,52 +259,45 @@ class _StudentDashboardState extends State<StudentDashboard>
     LocationPermission permission;
     bool justGranted = false;
 
-    // 1. Check/Request Permissions FIRST
+    // 1. Check Service Status (GPS)
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (mounted) {
+      setState(() => _isLocationServiceEnabled = serviceEnabled);
+    }
+
+    if (!serviceEnabled) {
+      // Only prompt if we need to
+      // await Geolocator.openLocationSettings();
+      // return false;
+    }
+
+    // 2. Check/Request Permissions
     permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        // _updateStatus(
-        //   'Permission denied. Please enable in Settings.',
-        //   Colors.orange,
-        // );
         return false;
       }
-      // If we are here, we just got permission
       justGranted = true;
     }
 
     if (permission == LocationPermission.deniedForever) {
-      // _updateStatus(
-      //   'Permission permanently denied. Go to Phone Settings.',
-      //   Colors.red,
-      // );
       return false;
     }
 
-    // 2. Check Service Status (GPS)
-    serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      // Only open settings automatically if this is the "first run" (permission just granted)
-      if (justGranted) {
-        // _updateStatus('GPS is off. Opening Settings...', Colors.orange);
-        await Geolocator.openLocationSettings();
-
-        // Re-check after returning
-        serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    // 3. Re-check Service Status after permission (sometimes needed on first run)
+    if (justGranted) {
+      serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (mounted) {
+        setState(() => _isLocationServiceEnabled = serviceEnabled);
       }
-
-      // If still disabled (or if we didn't open settings), show message
       if (!serviceEnabled) {
-        // _updateStatus(
-        //   'Location (GPS) is disabled. Please turn it on.',
-        //   Colors.orange,
-        // );
+        await Geolocator.openLocationSettings();
         return false;
       }
     }
 
-    return true;
+    return serviceEnabled;
   }
 
   // void _updateStatus(String message, Color color) {
@@ -294,20 +310,37 @@ class _StudentDashboardState extends State<StudentDashboard>
   //   }
   // }
 
-  void _startLocationStream() {
+  void _startLocationStream() async {
+    // 1. Cancel existing stream if any
+    await _locationSubscription?.cancel();
+
+    // 2. Get initial position immediately (don't wait for stream)
+    try {
+      Position? position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+      _checkGeofence(position);
+    } catch (e) {
+      debugPrint('Error getting initial position: $e');
+    }
+
+    // 3. Start geofencing stream
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
-      distanceFilter: 5, // Relaxed slightly to reduce updates
+      distanceFilter: 5,
     );
 
-    Geolocator.getPositionStream(locationSettings: locationSettings).listen(
-      (Position position) {
-        _checkGeofence(position);
-      },
-      onError: (e) {
-        // _updateStatus('Location Error: $e', Colors.red);
-      },
-    );
+    _locationSubscription =
+        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+          (Position position) {
+            _checkGeofence(position);
+          },
+          onError: (e) {
+            debugPrint('Location Stream Error: $e');
+          },
+        );
   }
 
   void _checkGeofence(Position userPosition) async {
@@ -377,6 +410,8 @@ class _StudentDashboardState extends State<StudentDashboard>
               ? 'Campus Map'
               : _selectedIndex == 2
               ? 'Attendance'
+              : _selectedIndex == 3
+              ? 'Attendance History'
               : 'Security Settings',
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
@@ -444,6 +479,11 @@ class _StudentDashboardState extends State<StudentDashboard>
             ),
             _buildDrawerItem(
               index: 3,
+              icon: Icons.history_rounded,
+              label: 'History',
+            ),
+            _buildDrawerItem(
+              index: 4,
               icon: Icons.lock_reset_rounded,
               label: 'Change Password',
             ),
@@ -506,6 +546,8 @@ class _StudentDashboardState extends State<StudentDashboard>
       case 2:
         return _buildAttendanceTab(theme);
       case 3:
+        return AttendanceHistoryTab(studentUid: widget.currentUser.uid);
+      case 4:
         return const ChangePasswordTab();
       default:
         return _buildHomeTab(theme);
@@ -622,11 +664,17 @@ class _StudentDashboardState extends State<StudentDashboard>
                 child: _buildSummaryCard(
                   theme,
                   'Location',
-                  _isInsideCampus == true ? 'On Campus' : 'Off Campus',
-                  _isInsideCampus == true
-                      ? Icons.location_on
-                      : Icons.location_off,
-                  _isInsideCampus == true ? Colors.blue : Colors.red,
+                  _isInsideCampus == null
+                      ? 'Fetching...'
+                      : (_isInsideCampus == true ? 'On Campus' : 'Off Campus'),
+                  _isInsideCampus == null
+                      ? Icons.location_searching_rounded
+                      : (_isInsideCampus == true
+                            ? Icons.location_on
+                            : Icons.location_off),
+                  _isInsideCampus == null
+                      ? Colors.orange
+                      : (_isInsideCampus == true ? Colors.blue : Colors.red),
                 ),
               ),
               const SizedBox(width: 16),
@@ -790,22 +838,29 @@ class _StudentDashboardState extends State<StudentDashboard>
               children: [
                 Icon(
                   _currentPosition == null
-                      ? Icons.location_off_rounded
+                      ? (_isLocationServiceEnabled
+                            ? Icons.location_searching_rounded
+                            : Icons.location_off_rounded)
                       : Icons.straighten_rounded,
                   size: 20,
                   color: _currentPosition == null
-                      ? theme.colorScheme.error
+                      ? (_isLocationServiceEnabled
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.error)
                       : theme.colorScheme.primary,
                 ),
                 const SizedBox(width: 12),
                 Flexible(
                   child: Text(
                     _currentPosition == null
-                        ? 'Location is off. Please turn it on.'
-                        : 'Distance to Campus: ${_calculateDistance().toStringAsFixed(0)} meters',
+                        ? (!_isLocationServiceEnabled
+                              ? 'Location is off. Please turn it on.'
+                              : 'Fetching location...')
+                        : 'Distance to Campus: ${_calculateDistance() < 1000 ? '${_calculateDistance().toStringAsFixed(0)} meters' : '${(_calculateDistance() / 1000).toStringAsFixed(2)} km'}',
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
-                      color: _currentPosition == null
+                      color:
+                          _currentPosition == null && !_isLocationServiceEnabled
                           ? theme.colorScheme.error
                           : theme.colorScheme.onSurface,
                     ),
@@ -857,11 +912,17 @@ class _StudentDashboardState extends State<StudentDashboard>
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _StatusChip(
-                label: _isInsideCampus == true ? 'On Campus' : 'Off Campus',
-                icon: _isInsideCampus == true
-                    ? Icons.location_on_rounded
-                    : Icons.location_off_rounded,
-                color: _isInsideCampus == true ? Colors.blue : Colors.red,
+                label: _isInsideCampus == null
+                    ? 'Checking...'
+                    : (_isInsideCampus == true ? 'On Campus' : 'Off Campus'),
+                icon: _isInsideCampus == null
+                    ? Icons.location_searching_rounded
+                    : (_isInsideCampus == true
+                          ? Icons.location_on_rounded
+                          : Icons.location_off_rounded),
+                color: _isInsideCampus == null
+                    ? Colors.orange
+                    : (_isInsideCampus == true ? Colors.blue : Colors.red),
               ),
               const SizedBox(width: 8),
               _StatusChip(
@@ -916,6 +977,9 @@ class _StudentDashboardState extends State<StudentDashboard>
     } else if (!_isEnrolled) {
       title = 'Enrollment Required';
       subtitle = 'Please enroll your face before marking attendance.';
+    } else if (_isInsideCampus == null) {
+      title = 'Checking Location';
+      subtitle = 'Determining your distance from campus...';
     } else if (_isInsideCampus == false) {
       title = 'Outside Campus';
       subtitle = 'You must be within the campus boundary to mark attendance.';
@@ -1119,7 +1183,6 @@ class _ChangePasswordTabState extends State<ChangePasswordTab> {
       }
     } on FirebaseAuthException catch (e) {
       if (mounted) {
-        final theme = Theme.of(context);
         String title = 'Error';
         String message = 'Something went wrong.';
         if (e.code == 'wrong-password') {
@@ -1133,7 +1196,7 @@ class _ChangePasswordTabState extends State<ChangePasswordTab> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             behavior: SnackBarBehavior.floating,
-            backgroundColor: theme.colorScheme.errorContainer,
+            backgroundColor: Colors.red,
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1253,6 +1316,180 @@ class _ChangePasswordTabState extends State<ChangePasswordTab> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class AttendanceHistoryTab extends StatefulWidget {
+  final String studentUid;
+  const AttendanceHistoryTab({super.key, required this.studentUid});
+
+  @override
+  State<AttendanceHistoryTab> createState() => _AttendanceHistoryTabState();
+}
+
+class _AttendanceHistoryTabState extends State<AttendanceHistoryTab> {
+  DateTime _selectedDate = DateTime.now();
+
+  Future<void> _selectDate(BuildContext context) async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null && picked != _selectedDate) {
+      setState(() {
+        _selectedDate = picked;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final startOfDay = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+    );
+    final endOfDay = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+      23,
+      59,
+      59,
+    );
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Row(
+            children: [
+              const Icon(Icons.calendar_today_rounded, size: 20),
+              const SizedBox(width: 12),
+              Text(
+                '${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => _selectDate(context),
+                icon: const Icon(Icons.edit_calendar_rounded),
+                label: const Text('Change Date'),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance
+                .collection('attendance_requests')
+                .where('studentUid', isEqualTo: widget.studentUid)
+                .where('status', isEqualTo: 'verified')
+                .where(
+                  'verifiedAt',
+                  isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay),
+                )
+                .where(
+                  'verifiedAt',
+                  isLessThanOrEqualTo: Timestamp.fromDate(endOfDay),
+                )
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+
+              if (snapshot.hasError) {
+                return Center(child: Text('Error: ${snapshot.error}'));
+              }
+
+              final docs = snapshot.data?.docs ?? [];
+              if (docs.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.history_toggle_off_rounded,
+                        size: 64,
+                        color: theme.colorScheme.outline.withValues(alpha: 0.5),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No attendance records found.',
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: theme.colorScheme.outline,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: docs.length,
+                itemBuilder: (context, index) {
+                  final data = docs[index].data();
+                  final verifiedAt = data['verifiedAt'] as Timestamp?;
+                  final timeStr = verifiedAt != null
+                      ? "${verifiedAt.toDate().hour.toString().padLeft(2, '0')}:${verifiedAt.toDate().minute.toString().padLeft(2, '0')}"
+                      : '--:--';
+
+                  return Card(
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 4,
+                        ),
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: theme.colorScheme.primaryContainer,
+                            child: Icon(
+                              Icons.verified_rounded,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                          title: const Text(
+                            'Presence Verified',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: Text('Recorded at $timeStr'),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.green.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Text(
+                              'PRESENT',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.green,
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                      .animate()
+                      .fadeIn(delay: (index * 30).ms)
+                      .moveY(begin: 10, end: 0);
+                },
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }

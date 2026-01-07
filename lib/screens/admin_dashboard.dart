@@ -1003,7 +1003,7 @@ class _ChangePasswordTabState extends State<ChangePasswordTab> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             behavior: SnackBarBehavior.floating,
-            backgroundColor: theme.colorScheme.errorContainer,
+            backgroundColor: Colors.red,
             content: Row(
               children: [
                 Icon(icon, color: theme.colorScheme.error),
